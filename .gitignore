@@ -1,0 +1,22 @@
+# Environment
+.env
+
+# Data files (large, reproducible via fetch.py)
+data/raw/
+data/processed/
+
+# Trained model artefacts
+models/iforest.pkl
+models/lstm_autoencoder.pt
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+
+# OS
+.DS_Store
+Thumbs.db
