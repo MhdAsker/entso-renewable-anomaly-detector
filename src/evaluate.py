@@ -3,7 +3,13 @@ import os
 
 import numpy as np
 import pandas as pd
-from sklearn.metrics import f1_score, precision_score, recall_score, roc_auc_score
+from sklearn.metrics import (
+    f1_score,
+    precision_recall_curve,
+    precision_score,
+    recall_score,
+    roc_auc_score,
+)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -13,6 +19,25 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+def calibrate_threshold(y_true: np.ndarray, scores: np.ndarray) -> float:
+    """Select the F1-optimal threshold using validation data only."""
+    valid = np.isfinite(scores)
+    y_valid = np.asarray(y_true)[valid]
+    score_valid = np.asarray(scores)[valid]
+    if len(score_valid) == 0 or len(np.unique(y_valid)) < 2:
+        raise ValueError("Threshold calibration requires finite scores and both classes")
+    precision, recall, thresholds = precision_recall_curve(y_valid, score_valid)
+    f1 = 2 * precision[:-1] * recall[:-1] / np.maximum(
+        precision[:-1] + recall[:-1], np.finfo(float).eps
+    )
+    return float(thresholds[int(np.nanargmax(f1))])
+
+
+def predictions_from_scores(scores: np.ndarray, threshold: float) -> np.ndarray:
+    scores = np.asarray(scores)
+    return (np.isfinite(scores) & (scores >= threshold)).astype(int)
+
+
 def compute_anomaly_metrics(
     y_true: np.ndarray,
     y_pred: np.ndarray,
@@ -20,8 +45,13 @@ def compute_anomaly_metrics(
     model_name: str,
 ) -> dict:
     # Mask out NaN scores so ROC-AUC doesn't crash on rolling warm-up NaNs
-    valid = ~np.isnan(scores)
-    roc = roc_auc_score(y_true[valid], scores[valid]) if valid.any() else float("nan")
+    valid = np.isfinite(scores)
+    valid_classes = np.unique(y_true[valid]) if valid.any() else np.array([])
+    roc = (
+        roc_auc_score(y_true[valid], scores[valid])
+        if len(valid_classes) == 2
+        else float("nan")
+    )
 
     return {
         "model_name": model_name,

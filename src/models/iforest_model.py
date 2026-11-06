@@ -33,26 +33,54 @@ class IsolationForestDetector:
         )
         self.scaler = StandardScaler()
         self.predictions: np.ndarray | None = None
+        self.threshold: float | None = None
 
-    def fit_predict(self, X: np.ndarray) -> np.ndarray:
+    def fit(self, X: np.ndarray, save_artifact: bool = True) -> "IsolationForestDetector":
+        if X.ndim != 2 or len(X) == 0:
+            raise ValueError("X must be a non-empty 2D array")
         X_scaled = self.scaler.fit_transform(X)
+        self.model.fit(X_scaled)
+
+        if save_artifact:
+            self.save()
+        return self
+
+    def save(self) -> None:
+        os.makedirs(_MODELS_DIR, exist_ok=True)
+        joblib.dump(
+            {"model": self.model, "scaler": self.scaler, "threshold": self.threshold},
+            os.path.join(_MODELS_DIR, "iforest.pkl"),
+        )
+
+    @classmethod
+    def load(cls, path: str) -> "IsolationForestDetector":
+        artifact = joblib.load(path)
+        detector = cls()
+        detector.model = artifact["model"]
+        detector.scaler = artifact["scaler"]
+        detector.threshold = artifact.get("threshold")
+        return detector
+
+    def predict(self, X: np.ndarray) -> np.ndarray:
+        X_scaled = self.scaler.transform(X)
 
         # IsolationForest: -1 = anomaly, 1 = normal
-        raw = self.model.fit_predict(X_scaled)
-        preds = (raw == -1).astype(int)
+        if self.threshold is None:
+            raw = self.model.predict(X_scaled)
+            preds = (raw == -1).astype(int)
+        else:
+            preds = (-self.model.decision_function(X_scaled) >= self.threshold).astype(int)
 
         n = int(preds.sum())
         pct = 100 * n / len(preds)
         logger.info("IsolationForest flagged %d anomalies (%.1f%%)", n, pct)
 
-        os.makedirs(_MODELS_DIR, exist_ok=True)
-        joblib.dump(
-            {"model": self.model, "scaler": self.scaler},
-            os.path.join(_MODELS_DIR, "iforest.pkl"),
-        )
-
         self.predictions = preds
         return preds
+
+    def fit_predict(self, X: np.ndarray) -> np.ndarray:
+        """Compatibility helper. Prefer separate fit/predict for evaluation."""
+        return self.fit(X).predict(X)
 
     def get_scores(self, X: np.ndarray) -> np.ndarray:
         """Return negated decision function — higher score = more anomalous."""

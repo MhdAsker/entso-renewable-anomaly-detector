@@ -138,7 +138,7 @@ def plot_confusion_matrices(y_true: np.ndarray, predictions_dict: dict) -> None:
         ax.set_xticklabels(["Normal", "Anomaly"])
         ax.set_yticklabels(["Normal", "Anomaly"], rotation=0)
 
-    fig.suptitle("Confusion Matrices vs Ground-Truth Labels", fontsize=12, fontweight="bold")
+    fig.suptitle("Confusion Matrices vs Proxy Labels", fontsize=12, fontweight="bold")
     plt.tight_layout()
     _save("confusion_matrices.png")
 

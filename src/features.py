@@ -6,6 +6,10 @@ if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8")
 
 import pandas as pd
+import numpy as np
+
+from capacity import DEFAULT_CAPACITY_PATH, capacities_for_index
+from context import OPTIONAL_CONTEXT_COLS, attach_context
 
 logging.basicConfig(
     level=logging.INFO,
@@ -13,10 +17,6 @@ logging.basicConfig(
     datefmt="%Y-%m-%d %H:%M:%S",
 )
 logger = logging.getLogger(__name__)
-
-INSTALLED_WIND_MW = 66_000
-INSTALLED_SOLAR_MW = 73_000
-INSTALLED_TOTAL_MW = 139_000
 
 FEATURE_COLS = [
     "wind_error_mw",
@@ -37,6 +37,30 @@ FEATURE_COLS = [
     "season",
     "is_night",
     "is_weekend",
+    "hour_sin",
+    "hour_cos",
+    "week_sin",
+    "week_cos",
+    "year_sin",
+    "year_cos",
+]
+
+
+def feature_columns_for(df: pd.DataFrame) -> list[str]:
+    """Return core features plus any available optional context features."""
+    columns = list(FEATURE_COLS)
+    for column in OPTIONAL_CONTEXT_COLS:
+        if column in df and df[column].notna().any():
+            columns.extend([column, f"{column}_missing"])
+    return columns
+
+REQUIRED_INPUT_COLS = [
+    "actual_wind_total_mw",
+    "forecast_wind_total_mw",
+    "actual_solar_mw",
+    "forecast_solar_mw",
+    "actual_renewable_mw",
+    "forecast_renewable_mw",
 ]
 
 _SEASON_MAP = {
@@ -47,8 +71,27 @@ _SEASON_MAP = {
 }
 
 
-def build_features(df: pd.DataFrame) -> pd.DataFrame:
+def _validate_input(df: pd.DataFrame) -> None:
+    missing = sorted(set(REQUIRED_INPUT_COLS) - set(df.columns))
+    if missing:
+        raise ValueError(f"Missing required input columns: {', '.join(missing)}")
+    if not isinstance(df.index, pd.DatetimeIndex):
+        raise TypeError("Input must use a pandas DatetimeIndex")
+    if df.index.has_duplicates:
+        raise ValueError("Input index contains duplicate timestamps")
+
+
+def build_features(
+    df: pd.DataFrame,
+    output_path: str | os.PathLike | None = None,
+    capacity_path: str | os.PathLike = DEFAULT_CAPACITY_PATH,
+    context_path: str | os.PathLike | None = None,
+) -> pd.DataFrame:
+    _validate_input(df)
     df = df.copy()
+    df = df.sort_index()
+    if context_path is not None:
+        df = attach_context(df, context_path)
 
     # ── 1. Forecast errors ────────────────────────────────────────────────────
     df["wind_error_mw"] = df["actual_wind_total_mw"] - df["forecast_wind_total_mw"]
@@ -56,9 +99,13 @@ def build_features(df: pd.DataFrame) -> pd.DataFrame:
     df["total_error_mw"] = df["actual_renewable_mw"] - df["forecast_renewable_mw"]
 
     # ── 2. Normalised errors ──────────────────────────────────────────────────
-    df["wind_error_norm"] = df["wind_error_mw"] / INSTALLED_WIND_MW
-    df["solar_error_norm"] = df["solar_error_mw"] / INSTALLED_SOLAR_MW
-    df["total_error_norm"] = df["total_error_mw"] / INSTALLED_TOTAL_MW
+    capacity = capacities_for_index(df.index, capacity_path)
+    df["installed_wind_mw"] = capacity["wind_mw"]
+    df["installed_solar_mw"] = capacity["solar_mw"]
+    df["installed_total_mw"] = capacity.sum(axis=1)
+    df["wind_error_norm"] = df["wind_error_mw"] / df["installed_wind_mw"]
+    df["solar_error_norm"] = df["solar_error_mw"] / df["installed_solar_mw"]
+    df["total_error_norm"] = df["total_error_mw"] / df["installed_total_mw"]
 
     # ── 3. Absolute errors (for labeling) ────────────────────────────────────
     df["wind_abs_error"] = df["wind_error_mw"].abs()
@@ -68,8 +115,9 @@ def build_features(df: pd.DataFrame) -> pd.DataFrame:
     # ── 4. Ramp rates ─────────────────────────────────────────────────────────
     df["wind_ramp_mw"] = df["actual_wind_total_mw"].diff(1)
     df["solar_ramp_mw"] = df["actual_solar_mw"].diff(1)
+    df["actual_ramp_mw"] = df["actual_renewable_mw"].diff(1)
     df["forecast_ramp_mw"] = df["forecast_renewable_mw"].diff(1)
-    df["ramp_error_mw"] = df["wind_ramp_mw"] - df["forecast_ramp_mw"]
+    df["ramp_error_mw"] = df["actual_ramp_mw"] - df["forecast_ramp_mw"]
 
     # ── 5. Rolling statistics (shifted by 1 to avoid leakage) ────────────────
     df["error_roll_mean_24h"] = (
@@ -91,14 +139,20 @@ def build_features(df: pd.DataFrame) -> pd.DataFrame:
     df["season"] = df["month"].map(_SEASON_MAP)
     df["is_night"] = ((df["hour"] < 6) | (df["hour"] >= 22)).astype(int)
     df["is_weekend"] = (df.index.dayofweek >= 5).astype(int)
+    hour_angle = 2 * np.pi * df["hour"] / 24
+    week_angle = 2 * np.pi * df.index.dayofweek / 7
+    year_angle = 2 * np.pi * (df.index.dayofyear - 1) / 365.25
+    df["hour_sin"] = np.sin(hour_angle)
+    df["hour_cos"] = np.cos(hour_angle)
+    df["week_sin"] = np.sin(week_angle)
+    df["week_cos"] = np.cos(week_angle)
+    df["year_sin"] = np.sin(year_angle)
+    df["year_cos"] = np.cos(year_angle)
 
     # ── 7. Anomaly labels (rolling z-score on total_abs_error) ───────────────
-    df["rolling_mean"] = (
-        df["total_abs_error"].rolling(window=720, min_periods=168).mean()
-    )
-    df["rolling_std"] = (
-        df["total_abs_error"].rolling(window=720, min_periods=168).std()
-    )
+    history = df["total_abs_error"].shift(1)
+    df["rolling_mean"] = history.rolling(window=720, min_periods=168).mean()
+    df["rolling_std"] = history.rolling(window=720, min_periods=168).std()
     df["z_score"] = (df["total_abs_error"] - df["rolling_mean"]) / df["rolling_std"]
     df["is_anomaly"] = (df["z_score"] > 2.0).astype(int)
 
@@ -108,17 +162,18 @@ def build_features(df: pd.DataFrame) -> pd.DataFrame:
 
     # ── 8. Drop NaN rows created by rolling / diff ───────────────────────────
     n_before = len(df)
-    df = df.dropna(subset=FEATURE_COLS + ["is_anomaly", "z_score"])
+    model_features = feature_columns_for(df)
+    df = df.dropna(subset=model_features + ["is_anomaly", "z_score"])
     n_dropped = n_before - len(df)
     logger.info(
         "Dropped %d rows due to NaN | Remaining: %d", n_dropped, len(df)
     )
 
     # ── 9. Save ───────────────────────────────────────────────────────────────
-    out_path = os.path.join(
-        os.path.dirname(os.path.dirname(__file__)),
-        "data", "processed", "features.parquet",
+    out_path = output_path or os.path.join(
+        os.path.dirname(os.path.dirname(__file__)), "data", "processed", "features.parquet"
     )
+    os.makedirs(os.path.dirname(os.path.abspath(out_path)), exist_ok=True)
     df.to_parquet(out_path)
 
     # ── 10. Summary ───────────────────────────────────────────────────────────
@@ -136,7 +191,7 @@ def build_features(df: pd.DataFrame) -> pd.DataFrame:
     print("FEATURE ENGINEERING COMPLETE")
     print("=" * 44)
     print(f"Total rows      : {n_final}")
-    print(f"Feature columns : {len(FEATURE_COLS)}")
+    print(f"Feature columns : {len(model_features)}")
     print(f"Anomaly hours   : {n_anomalies_final} ({pct_final:.1f}%)")
     print(f"Date range      : {date_start} → {date_end}")
     print(f"Mean wind error : {mean_wind_err:.0f} MW")

@@ -22,8 +22,9 @@ class ZScoreDetector:
         self.predictions: np.ndarray | None = None
 
     def _rolling_zscore(self, series: pd.Series) -> pd.Series:
-        roll = series.rolling(window=168, min_periods=24)
-        z = (series - roll.mean()) / roll.std()
+        history = series.shift(1)
+        roll = history.rolling(window=168, min_periods=24)
+        z = (series - roll.mean()) / roll.std().replace(0, np.nan)
         return z
 
     def fit_predict(self, df: pd.DataFrame) -> np.ndarray:

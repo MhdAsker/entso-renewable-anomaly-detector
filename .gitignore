@@ -8,6 +8,11 @@ data/processed/
 # Trained model artefacts
 models/iforest.pkl
 models/lstm_autoencoder.pt
+models/registry/
+
+# Operational runtime state and generated monitoring output
+runtime/
+results/monitoring/
 
 # Python
 __pycache__/

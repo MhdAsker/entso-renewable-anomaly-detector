@@ -23,9 +23,9 @@ _MODELS_DIR = os.path.join(
 class LSTMAutoencoder(nn.Module):
     """
     LSTM Autoencoder for anomaly detection.
-    Trained ONLY on normal hours (is_anomaly == 0).
+    Trained without labels on a chronological training period.
     Anomaly score = reconstruction error on unseen data.
-    High error = pattern doesn't match what the model learned as normal.
+    High error = pattern differs from what the model learned in training.
 
     Architecture:
       Encoder: LSTM(input_dim, hidden_dim=32, num_layers=1, batch_first=True)
@@ -58,28 +58,35 @@ class LSTMAutoencoder(nn.Module):
 
 
 class LSTMAnomalyDetector:
-    def __init__(self, sequence_len: int = 24, hidden_dim: int = 32):
+    def __init__(self, sequence_len: int = 24, hidden_dim: int = 32, random_state: int = 42):
         self.sequence_len = sequence_len
         self.hidden_dim = hidden_dim
         self.model: LSTMAutoencoder | None = None
         self.scaler = StandardScaler()
         self.threshold: float | None = None
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.random_state = random_state
 
     def _make_sequences(self, X: np.ndarray) -> torch.Tensor:
         """Slide a fixed window over X → (n_sequences, seq_len, n_features)."""
         n = len(X)
+        if n < self.sequence_len:
+            raise ValueError(
+                f"Need at least {self.sequence_len} rows to build a sequence; got {n}"
+            )
         seqs = np.stack(
-            [X[i : i + self.sequence_len] for i in range(n - self.sequence_len)],
+            [X[i : i + self.sequence_len] for i in range(n - self.sequence_len + 1)],
             axis=0,
         )
         return torch.tensor(seqs, dtype=torch.float32)
 
     def _reconstruction_errors(self, X_scaled: np.ndarray) -> np.ndarray:
         """Per-timestep MSE (mean over features), padded to original length."""
+        if self.model is None:
+            raise RuntimeError("Model must be fitted before scoring")
         self.model.eval()
         sequences = self._make_sequences(X_scaled).to(self.device)
-        errors = np.zeros(len(X_scaled))
+        errors = np.full(len(X_scaled), np.nan)
 
         with torch.no_grad():
             dataset = TensorDataset(sequences)
@@ -92,9 +99,9 @@ class LSTMAnomalyDetector:
                 # Take error at the LAST timestep as the label for that position
                 seq_errors.append(mse[:, -1].cpu().numpy())
 
-        seq_errors = np.concatenate(seq_errors)  # length = n - seq_len
-        # Pad front with zeros — no prediction possible for first seq_len rows
-        errors[self.sequence_len :] = seq_errors
+        seq_errors = np.concatenate(seq_errors)
+        # Pad the front with NaN where a complete window is unavailable.
+        errors[self.sequence_len - 1 :] = seq_errors
         return errors
 
     def fit(
@@ -103,7 +110,14 @@ class LSTMAnomalyDetector:
         epochs: int = 30,
         batch_size: int = 64,
         lr: float = 0.001,
+        save_artifact: bool = True,
     ) -> None:
+        if X_train.ndim != 2 or len(X_train) < self.sequence_len:
+            raise ValueError("X_train must be a 2D array with at least sequence_len rows")
+        np.random.seed(self.random_state)
+        torch.manual_seed(self.random_state)
+        if torch.cuda.is_available():
+            torch.cuda.manual_seed_all(self.random_state)
         X_scaled = self.scaler.fit_transform(X_train)
 
         sequences = self._make_sequences(X_scaled).to(self.device)
@@ -136,9 +150,19 @@ class LSTMAnomalyDetector:
         # Threshold = 95th percentile of per-timestep errors on training data
         train_errors = self._reconstruction_errors(X_scaled)
         # Exclude padded zeros from percentile computation
-        non_zero = train_errors[self.sequence_len :]
-        self.threshold = float(np.percentile(non_zero, 95))
+        valid_errors = train_errors[np.isfinite(train_errors)]
+        self.threshold = float(np.percentile(valid_errors, 95))
 
+        if save_artifact:
+            self.save(input_dim)
+        logger.info(
+            "LSTM Autoencoder trained | threshold=%.4f", self.threshold
+        )
+
+    def save(self, input_dim: int | None = None) -> None:
+        if self.model is None or self.threshold is None:
+            raise RuntimeError("Model and threshold must be available before saving")
+        input_dim = input_dim or self.model.input_dim
         os.makedirs(_MODELS_DIR, exist_ok=True)
         torch.save(
             {
@@ -152,11 +176,31 @@ class LSTMAnomalyDetector:
             },
             os.path.join(_MODELS_DIR, "lstm_autoencoder.pt"),
         )
-        logger.info(
-            "LSTM Autoencoder trained | threshold=%.4f", self.threshold
+
+    @classmethod
+    def load(cls, path: str) -> "LSTMAnomalyDetector":
+        artifact = torch.load(path, map_location="cpu", weights_only=False)
+        detector = cls(
+            sequence_len=int(artifact["sequence_len"]),
+            hidden_dim=int(artifact["hidden_dim"]),
         )
+        detector.device = torch.device("cpu")
+        detector.model = LSTMAutoencoder(
+            input_dim=int(artifact["input_dim"]), hidden_dim=detector.hidden_dim
+        ).to(detector.device)
+        detector.model.load_state_dict(artifact["model_state"])
+        detector.model.eval()
+        detector.scaler.mean_ = np.asarray(artifact["scaler_mean"])
+        detector.scaler.scale_ = np.asarray(artifact["scaler_scale"])
+        detector.scaler.var_ = detector.scaler.scale_ ** 2
+        detector.scaler.n_features_in_ = int(artifact["input_dim"])
+        detector.scaler.n_samples_seen_ = 1
+        detector.threshold = float(artifact["threshold"])
+        return detector
 
     def predict(self, X: np.ndarray) -> np.ndarray:
+        if self.threshold is None:
+            raise RuntimeError("Model must be fitted before prediction")
         X_scaled = self.scaler.transform(X)
         errors = self._reconstruction_errors(X_scaled)
         return (errors > self.threshold).astype(int)
@@ -168,17 +212,10 @@ class LSTMAnomalyDetector:
 
     def fit_predict(self, df: pd.DataFrame, feature_cols: list[str]) -> np.ndarray:
         X_all = df[feature_cols].values
-        X_normal = df.loc[df["is_anomaly"] == 0, feature_cols].values
-
-        n_normal = len(X_normal)
         n_total = len(X_all)
-        logger.info(
-            "Training on %d normal hours, predicting on %d total hours",
-            n_normal,
-            n_total,
-        )
+        logger.info("Training and predicting on %d supplied hours", n_total)
 
-        self.fit(X_normal)
+        self.fit(X_all)
         preds = self.predict(X_all)
 
         n = int(preds.sum())

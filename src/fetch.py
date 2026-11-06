@@ -1,187 +1,171 @@
-import os
+"""Resilient, chunked ENTSO-E data ingestion with row-level quality flags."""
+
+from __future__ import annotations
+
 import logging
+import os
+import time
+from pathlib import Path
+
 import pandas as pd
 from dotenv import load_dotenv
 from entsoe import EntsoePandasClient
 
+logger = logging.getLogger(__name__)
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",
     datefmt="%Y-%m-%d %H:%M:%S",
 )
-logger = logging.getLogger(__name__)
+
+SOURCE_COLUMNS = [
+    "actual_wind_onshore_mw",
+    "actual_wind_offshore_mw",
+    "actual_solar_mw",
+    "forecast_wind_onshore_mw",
+    "forecast_wind_offshore_mw",
+    "forecast_solar_mw",
+]
 
 
 class ENTSOFetcher:
-    INSTALLED_WIND_MW = 66000   # ~66 GW installed wind capacity DE 2023
-    INSTALLED_SOLAR_MW = 73000  # ~73 GW installed solar capacity DE 2023
-
-    def __init__(self):
+    def __init__(self, max_attempts: int = 3, retry_delay: float = 1.0):
         load_dotenv()
-        self.client = EntsoePandasClient(api_key=os.environ["ENTSOE_API_KEY"])
-        self.country = "DE"
+        api_key = os.environ.get("ENTSOE_API_KEY")
+        if not api_key:
+            raise RuntimeError("ENTSOE_API_KEY is not set; copy .env.example to .env")
+        self.client = EntsoePandasClient(api_key=api_key)
         self.zone = "DE_LU"
-        self.installed_wind_mw = self.INSTALLED_WIND_MW
-        self.installed_solar_mw = self.INSTALLED_SOLAR_MW
+        self.max_attempts = max_attempts
+        self.retry_delay = retry_delay
         logger.info("ENTSO-E client ready")
 
-    def _safe_fetch(self, func, *args, **kwargs):
-        try:
-            return func(*args, **kwargs)
-        except Exception as exc:
-            logger.warning("Fetch failed for %s: %s", func.__name__, exc)
-            return pd.DataFrame()
+    def _fetch_with_retry(self, func, *args, **kwargs):
+        for attempt in range(1, self.max_attempts + 1):
+            try:
+                return func(*args, **kwargs)
+            except Exception as exc:
+                if attempt == self.max_attempts:
+                    logger.error("%s failed after %d attempts: %s", func.__name__, attempt, exc)
+                    return pd.DataFrame()
+                delay = self.retry_delay * (2 ** (attempt - 1))
+                logger.warning(
+                    "%s attempt %d/%d failed; retrying in %.1fs: %s",
+                    func.__name__, attempt, self.max_attempts, delay, exc,
+                )
+                time.sleep(delay)
 
-    def fetch_all(self, start: str = "20230101", end: str = "20231231") -> pd.DataFrame:
+    @staticmethod
+    def _hourly_series(obj, name: str) -> pd.Series:
+        if obj is None or getattr(obj, "empty", True):
+            return pd.Series(dtype=float, name=name)
+        if isinstance(obj, pd.DataFrame):
+            preferred = [c for c in obj.columns if "actual aggregated" in str(c).lower()]
+            obj = obj[preferred[0] if preferred else obj.select_dtypes("number").columns[0]]
+        series = obj.copy()
+        if series.index.tz is not None:
+            series.index = series.index.tz_convert("UTC").tz_localize(None)
+        series = pd.to_numeric(series, errors="coerce").resample("h").mean()
+        series.name = name
+        return series
+
+    @staticmethod
+    def _forecast_series(frame: pd.DataFrame, fragment: str, name: str) -> pd.Series:
+        if frame is None or getattr(frame, "empty", True):
+            return pd.Series(dtype=float, name=name)
+        matches = [c for c in frame.columns if fragment.lower() in str(c).lower()]
+        if not matches:
+            logger.warning("Forecast column matching '%s' not found", fragment)
+            return pd.Series(dtype=float, name=name)
+        return ENTSOFetcher._hourly_series(frame[matches[0]], name)
+
+    def _fetch_range(self, start: pd.Timestamp, end: pd.Timestamp) -> pd.DataFrame:
+        query_generation = self.client.query_generation
+        actual_wind_on = self._fetch_with_retry(
+            query_generation, self.zone, start=start, end=end, psr_type="B19"
+        )
+        actual_wind_off = self._fetch_with_retry(
+            query_generation, self.zone, start=start, end=end, psr_type="B18"
+        )
+        actual_solar = self._fetch_with_retry(
+            query_generation, self.zone, start=start, end=end, psr_type="B16"
+        )
+        forecast = self._fetch_with_retry(
+            self.client.query_wind_and_solar_forecast, self.zone, start=start, end=end
+        )
+
+        parts = [
+            self._hourly_series(actual_wind_on, "actual_wind_onshore_mw"),
+            self._hourly_series(actual_wind_off, "actual_wind_offshore_mw"),
+            self._hourly_series(actual_solar, "actual_solar_mw"),
+            self._forecast_series(forecast, "Wind Onshore", "forecast_wind_onshore_mw"),
+            self._forecast_series(forecast, "Wind Offshore", "forecast_wind_offshore_mw"),
+            self._forecast_series(forecast, "Solar", "forecast_solar_mw"),
+        ]
+        non_empty = [part for part in parts if not part.empty]
+        frame = pd.concat(non_empty, axis=1) if non_empty else pd.DataFrame()
+        expected = pd.date_range(
+            start.tz_convert("UTC").tz_localize(None),
+            end.tz_convert("UTC").tz_localize(None),
+            freq="h",
+            inclusive="left",
+        )
+        frame = frame.reindex(expected)
+        for column in SOURCE_COLUMNS:
+            if column not in frame:
+                frame[column] = float("nan")
+        return frame[SOURCE_COLUMNS]
+
+    def fetch_all(self, start: str = "20230101", end: str = "20240101") -> pd.DataFrame:
         start_ts = pd.Timestamp(start, tz="Europe/Brussels")
         end_ts = pd.Timestamp(end, tz="Europe/Brussels")
+        if end_ts <= start_ts:
+            raise ValueError("end must be later than start")
 
-        # ── 1. Actual wind onshore (B19) ──────────────────────────────────────
-        raw_wind_on = self._safe_fetch(
-            self.client.query_generation,
-            self.country,
-            start=start_ts,
-            end=end_ts,
-            psr_type="B19",
-        )
+        chunks = []
+        cursor = start_ts
+        while cursor < end_ts:
+            next_month = (cursor + pd.offsets.MonthBegin(1)).normalize()
+            chunk_end = min(next_month, end_ts)
+            logger.info("Fetching chunk %s to %s", cursor.date(), chunk_end.date())
+            chunks.append(self._fetch_range(cursor, chunk_end))
+            cursor = chunk_end
 
-        # ── 2. Actual wind offshore (B18) ─────────────────────────────────────
-        raw_wind_off = self._safe_fetch(
-            self.client.query_generation,
-            self.country,
-            start=start_ts,
-            end=end_ts,
-            psr_type="B18",
-        )
+        df = pd.concat(chunks).sort_index()
+        df = df[~df.index.duplicated(keep="last")]
+        missing_before = df[SOURCE_COLUMNS].isna()
+        df[SOURCE_COLUMNS] = df[SOURCE_COLUMNS].ffill(limit=2)
+        imputed = missing_before & df[SOURCE_COLUMNS].notna()
+        df["quality_source_missing_count"] = missing_before.sum(axis=1)
+        df["quality_imputed_count"] = imputed.sum(axis=1)
+        df["quality_unresolved_count"] = df[SOURCE_COLUMNS].isna().sum(axis=1)
+        df["quality_is_complete"] = (df["quality_unresolved_count"] == 0).astype(int)
 
-        # ── 3. Actual solar (B16) ─────────────────────────────────────────────
-        raw_solar = self._safe_fetch(
-            self.client.query_generation,
-            self.country,
-            start=start_ts,
-            end=end_ts,
-            psr_type="B16",
-        )
+        df["actual_wind_total_mw"] = df[
+            ["actual_wind_onshore_mw", "actual_wind_offshore_mw"]
+        ].sum(axis=1, min_count=2)
+        df["forecast_wind_total_mw"] = df[
+            ["forecast_wind_onshore_mw", "forecast_wind_offshore_mw"]
+        ].sum(axis=1, min_count=2)
+        df["actual_renewable_mw"] = df[
+            ["actual_wind_total_mw", "actual_solar_mw"]
+        ].sum(axis=1, min_count=2)
+        df["forecast_renewable_mw"] = df[
+            ["forecast_wind_total_mw", "forecast_solar_mw"]
+        ].sum(axis=1, min_count=2)
 
-        # ── 4. Wind + solar forecast (day-ahead) ──────────────────────────────
-        raw_forecast = self._safe_fetch(
-            self.client.query_wind_and_solar_forecast,
-            self.zone,
-            start=start_ts,
-            end=end_ts,
-        )
-
-        # ── Helper: normalise to hourly UTC Series/DataFrame ──────────────────
-        def to_hourly(obj, name=None):
-            if obj is None or (isinstance(obj, pd.DataFrame) and obj.empty):
-                return pd.Series(dtype=float, name=name)
-            if isinstance(obj, pd.DataFrame):
-                # query_generation may return MultiIndex columns; take first numeric col
-                obj = obj.iloc[:, 0]
-            obj = obj.copy()
-            obj.index = obj.index.tz_convert("UTC").tz_localize(None)
-            return obj.resample("h").mean()
-
-        wind_on_h = to_hourly(raw_wind_on, "actual_wind_onshore_mw")
-        wind_off_h = to_hourly(raw_wind_off, "actual_wind_offshore_mw")
-        solar_h = to_hourly(raw_solar, "actual_solar_mw")
-
-        # ── Forecast columns ──────────────────────────────────────────────────
-        def forecast_series(df, col_fragment, out_name):
-            if df is None or (isinstance(df, pd.DataFrame) and df.empty):
-                return pd.Series(dtype=float, name=out_name)
-            match = [c for c in df.columns if col_fragment.lower() in c.lower()]
-            if not match:
-                logger.warning("Forecast column matching '%s' not found", col_fragment)
-                return pd.Series(dtype=float, name=out_name)
-            s = df[match[0]].copy()
-            s.index = s.index.tz_convert("UTC").tz_localize(None)
-            s = s.resample("h").mean()
-            s.name = out_name
-            return s
-
-        fc_wind_on_h = forecast_series(raw_forecast, "Wind Onshore", "forecast_wind_onshore_mw")
-        fc_wind_off_h = forecast_series(raw_forecast, "Wind Offshore", "forecast_wind_offshore_mw")
-        fc_solar_h = forecast_series(raw_forecast, "Solar", "forecast_solar_mw")
-
-        # ── Rename actuals ────────────────────────────────────────────────────
-        wind_on_h.name = "actual_wind_onshore_mw"
-        wind_off_h.name = "actual_wind_offshore_mw"
-        solar_h.name = "actual_solar_mw"
-
-        # ── Merge on index (outer join) ───────────────────────────────────────
-        parts = [
-            wind_on_h,
-            wind_off_h,
-            solar_h,
-            fc_wind_on_h,
-            fc_wind_off_h,
-            fc_solar_h,
-        ]
-        # Filter out empty series before concat to avoid all-NaN columns
-        non_empty = [p for p in parts if not p.empty]
-        if not non_empty:
-            logger.warning("All fetches returned empty data; returning empty DataFrame")
-            return pd.DataFrame()
-
-        df = pd.concat(non_empty, axis=1, join="outer")
-
-        # Ensure all expected columns exist
-        for col in [
-            "actual_wind_onshore_mw",
-            "actual_wind_offshore_mw",
-            "actual_solar_mw",
-            "forecast_wind_onshore_mw",
-            "forecast_wind_offshore_mw",
-            "forecast_solar_mw",
-        ]:
-            if col not in df.columns:
-                df[col] = float("nan")
-
-        # Forward-fill max 2 hours
-        df = df.ffill(limit=2)
-
-        # ── Computed columns ──────────────────────────────────────────────────
-        df["actual_wind_total_mw"] = (
-            df["actual_wind_onshore_mw"].fillna(0)
-            + df["actual_wind_offshore_mw"].fillna(0)
-        )
-        df["forecast_wind_total_mw"] = (
-            df["forecast_wind_onshore_mw"].fillna(0)
-            + df["forecast_wind_offshore_mw"].fillna(0)
-        )
-        df["actual_renewable_mw"] = (
-            df["actual_wind_total_mw"] + df["actual_solar_mw"].fillna(0)
-        )
-        df["forecast_renewable_mw"] = (
-            df["forecast_wind_total_mw"] + df["forecast_solar_mw"].fillna(0)
-        )
-
-        # Drop rows where ALL actual columns are NaN
-        actual_cols = ["actual_wind_onshore_mw", "actual_wind_offshore_mw", "actual_solar_mw"]
-        df = df.dropna(subset=actual_cols, how="all")
-
-        # ── Save ──────────────────────────────────────────────────────────────
-        out_path = os.path.join(
-            os.path.dirname(os.path.dirname(__file__)), "data", "raw", "entso_raw.parquet"
-        )
-        df.to_parquet(out_path)
-
-        wind_mean = df["actual_wind_total_mw"].mean()
-        solar_mean = df["actual_solar_mw"].mean()
+        output_path = Path(__file__).resolve().parents[1] / "data" / "raw" / "entso_raw.parquet"
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        df.to_parquet(output_path)
         logger.info(
-            "Fetched %d hourly rows | Wind: %.0f MW avg | Solar: %.0f MW avg",
-            len(df),
-            wind_mean,
-            solar_mean,
+            "Fetched %d hourly rows | complete %.1f%% | unresolved source values %d",
+            len(df), 100 * df["quality_is_complete"].mean(),
+            int(df["quality_unresolved_count"].sum()),
         )
-
         return df
 
 
 if __name__ == "__main__":
-    fetcher = ENTSOFetcher()
-    df = fetcher.fetch_all("20230101", "20231231")
-    print(df.head())
-    print(df.shape)
-    print(df.isnull().sum())
+    result = ENTSOFetcher().fetch_all()
+    print(result.shape)
+    print(result.filter(like="quality_").describe())
