@@ -1,0 +1,2 @@
+dataset_id,feature_path,outcome_path,zone,period_start,period_end,label_type,evidence_level,active
+de_lu_2023,data/processed/features.parquet,,DE_LU,2023-01-01,2023-12-31,rolling_forecast_error_proxy,internal_proxy,true

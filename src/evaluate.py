@@ -4,7 +4,9 @@ import os
 import numpy as np
 import pandas as pd
 from sklearn.metrics import (
+    average_precision_score,
     f1_score,
+    matthews_corrcoef,
     precision_recall_curve,
     precision_score,
     recall_score,
@@ -44,6 +46,11 @@ def compute_anomaly_metrics(
     scores: np.ndarray,
     model_name: str,
 ) -> dict:
+    y_true = np.asarray(y_true, dtype=int)
+    y_pred = np.asarray(y_pred, dtype=int)
+    scores = np.asarray(scores, dtype=float)
+    if not (len(y_true) == len(y_pred) == len(scores)):
+        raise ValueError("Metric inputs must have equal length")
     # Mask out NaN scores so ROC-AUC doesn't crash on rolling warm-up NaNs
     valid = np.isfinite(scores)
     valid_classes = np.unique(y_true[valid]) if valid.any() else np.array([])
@@ -52,6 +59,13 @@ def compute_anomaly_metrics(
         if len(valid_classes) == 2
         else float("nan")
     )
+    pr_auc = (
+        average_precision_score(y_true[valid], scores[valid])
+        if len(valid_classes) == 2
+        else float("nan")
+    )
+    false_positives = int(((y_pred == 1) & (y_true == 0)).sum())
+    duration_days = max(len(y_true) / 24, 1 / 24)
 
     return {
         "model_name": model_name,
@@ -59,7 +73,52 @@ def compute_anomaly_metrics(
         "recall": recall_score(y_true, y_pred, zero_division=0),
         "f1": f1_score(y_true, y_pred, zero_division=0),
         "roc_auc": roc,
+        "pr_auc": pr_auc,
+        "mcc": matthews_corrcoef(y_true, y_pred) if len(np.unique(y_true)) == 2 else float("nan"),
+        "false_alerts_per_30d": false_positives * 30 / duration_days,
         "n_anomalies_detected": int(y_pred.sum()),
+    }
+
+
+def block_bootstrap_confidence_intervals(
+    y_true: np.ndarray,
+    y_pred: np.ndarray,
+    scores: np.ndarray,
+    *,
+    block_size: int = 168,
+    n_bootstrap: int = 500,
+    confidence: float = 0.95,
+    random_state: int = 42,
+) -> dict[str, tuple[float, float]]:
+    """Moving-block bootstrap intervals that preserve local serial dependence."""
+    y_true = np.asarray(y_true)
+    y_pred = np.asarray(y_pred)
+    scores = np.asarray(scores)
+    if not (len(y_true) == len(y_pred) == len(scores)) or len(y_true) == 0:
+        raise ValueError("Bootstrap inputs must be non-empty and have equal length")
+    block_size = min(block_size, len(y_true))
+    rng = np.random.default_rng(random_state)
+    metrics = {"precision": [], "recall": [], "f1": [], "roc_auc": [], "pr_auc": []}
+    max_start = len(y_true) - block_size
+    n_blocks = int(np.ceil(len(y_true) / block_size))
+    for _ in range(n_bootstrap):
+        starts = rng.integers(0, max_start + 1, size=n_blocks)
+        sampled = np.concatenate([np.arange(start, start + block_size) for start in starts])
+        sampled = sampled[: len(y_true)]
+        result = compute_anomaly_metrics(
+            y_true[sampled], y_pred[sampled], scores[sampled], "bootstrap"
+        )
+        for name in metrics:
+            if np.isfinite(result[name]):
+                metrics[name].append(result[name])
+    alpha = (1 - confidence) / 2
+    return {
+        name: (
+            float(np.quantile(values, alpha)),
+            float(np.quantile(values, 1 - alpha)),
+        )
+        for name, values in metrics.items()
+        if values
     }
 
 

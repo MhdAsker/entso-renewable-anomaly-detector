@@ -3,10 +3,12 @@
 [![Python](https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
 [![PyTorch](https://img.shields.io/badge/PyTorch-2.x-EE4C2C?logo=pytorch&logoColor=white)](https://pytorch.org/)
 [![Data](https://img.shields.io/badge/Data-ENTSO--E-F28C28)](https://transparency.entsoe.eu/)
+[![Tests](https://img.shields.io/badge/tests-32%20passing-2EA44F)](#verification)
+[![Study](https://img.shields.io/badge/evidence-internal%20proxy-8A2BE2)](#scientific-claim-boundary)
 [![License](https://img.shields.io/badge/License-MIT-2EA44F)](#license)
 
 A reproducible research and operations framework for detecting unusual hourly
-wind-and-solar forecast errors in the German bidding zone. The repository
+wind-and-solar forecast errors in the Germany/Luxembourg bidding zone. The repository
 compares causal statistical, robust, tree-based, and sequence models; evaluates
 them with chronological holdouts and rolling-origin backtests; and provides an
 idempotent batch-scoring and monitoring path.
@@ -19,34 +21,75 @@ idempotent batch-scoring and monitoring path.
 
 ## Abstract
 
-Day-ahead renewable-generation forecasts are inputs to power-system scheduling,
-reserve planning, and market operations. Forecast errors are heteroscedastic,
-seasonal, and technology-dependent: a deviation that is exceptional during a
-low-generation period may be routine during a high-wind episode. This project
-studies whether four unsupervised or weakly calibrated anomaly detectors can
-identify statistically unusual hourly forecast errors from German ENTSO-E wind
-and solar data.
+Day-ahead renewable-generation forecasts support power-system scheduling,
+reserve planning, and electricity-market operations. Their errors are strongly
+seasonal, heteroscedastic, and dependent on installed capacity, making a fixed
+global anomaly rule difficult to justify. This repository presents a
+reproducible study of contemporaneous wind-and-solar forecast-error anomaly
+detection using hourly ENTSO-E data for Germany/Luxembourg in 2023.
 
-The workflow constructs 24 causal features from actual and forecast generation,
-ramp errors, trailing statistics, installed-capacity normalization, and cyclic
-calendar encodings. Models are fitted on the first 60% of observations,
-decision thresholds are selected exclusively on the next 10%, and final metrics
-are computed on the last 30%. A four-fold expanding-window experiment measures
-seasonal stability. The strongest holdout result is obtained by a robust
-median-absolute-deviation detector (F1 = 0.784), while Isolation Forest provides
-the strongest less-directly-coupled multivariate result (F1 = 0.583). The LSTM
-autoencoder exhibits substantial seasonal threshold transfer failure (F1 =
-0.201 and 911 alerts on 2,571 holdout hours).
+The pipeline constructs 24 leakage-controlled features from generation errors,
+ramps, trailing statistics, capacity normalization, and cyclic calendar terms.
+Six detector families are studied: rolling z-score, robust median absolute
+deviation (MAD), seasonal conditional quantiles, Isolation Forest, an LSTM
+autoencoder, and split-conformal calibration of MAD scores. The primary design
+uses a chronological 60/10/30 fit/calibration/holdout split. Complementary
+evidence includes four expanding-window folds, one-to-one event metrics without
+point adjustment, 168-hour moving-block uncertainty intervals, paired model
+comparisons, feature ablations, circular-shift negative controls with Holm
+correction, threshold-policy sensitivity, cost-utility scenarios, and seeded
+feature-corruption experiments.
 
-The repository also includes retryable monthly ingestion, explicit data-quality
-flags, versioned and checksummed model artifacts, atomic scoring state, alert
-episode deduplication, operator feedback, and freshness/alert-rate/drift
-monitoring. The result is both a research benchmark and a transparent prototype
-for scheduled anomaly-screening operations.
+On the fixed proxy-label holdout, seasonal quantile achieves the highest F1
+(0.836; 95% block-bootstrap interval 0.757–0.901) and event F1 (0.833). Robust
+MAD achieves F1 0.784 with only 1.12 false alerts per 30 days and is the most
+stable method across rolling folds (mean F1 0.879; worst fold 0.683). The paired
+F1 difference between robust MAD and seasonal quantile is unresolved
+(-0.052; 95% interval -0.189 to 0.071). Isolation Forest is significantly worse
+than seasonal quantile on paired F1 and degrades from 0.583 to 0.343 under 20%
+feature missingness. The LSTM demonstrates marked threshold-transfer failure.
+
+These results are agreement with an internal forecast-error proxy—not verified
+grid incidents or causal operational value. The repository therefore combines
+positive results with explicit claim boundaries, evidence-level contracts, and
+a catalog-driven path toward multi-zone, multi-year, independently governed
+validation. It also supplies a versioned scheduled-batch prototype with atomic
+state, alert episodes, feedback, and monitoring.
+
+## Results at a glance
+
+| Question | Evidence | Result |
+|---|---|---|
+| Best fixed-holdout detector | 2,571-hour chronological holdout | Seasonal quantile: F1 0.836, event F1 0.833 |
+| Best temporal-transfer detector | Four expanding-window folds | Robust MAD: F1 0.879 ± 0.134; worst fold 0.683 |
+| Lowest alert burden among strong models | Fixed holdout | Robust MAD: 1.12 false alerts per 30 days |
+| Does robust MAD differ from seasonal quantile? | 500 paired 168-hour bootstraps | Unresolved: ΔF1 -0.052 (-0.189, 0.071) |
+| Does Isolation Forest differ from seasonal quantile? | Same paired bootstrap | Worse: ΔF1 -0.253 (-0.345, -0.178) |
+| Are results timestamp-specific? | 500 circular label shifts, 10 Holm-corrected tests | All adjusted p = 0.01996 |
+| Is the multivariate detector robust to missing inputs? | 20 seeded repeats per corruption level | Isolation Forest F1 falls 41% at 20% missingness |
+| Has external validity been demonstrated? | Dataset/evidence catalog | **No**: one zone-year, internal proxy labels only |
+
+## Scientific claim boundary
+
+This repository supports different claims at different evidence levels:
+
+| Claim | Status | Basis |
+|---|---|---|
+| The code paths are reproducible and regression-tested | Supported | Deterministic seeds, hashes/manifests, 32 tests, generated artifacts |
+| Several methods detect the project's forecast-error proxy | Supported for the stored DE_LU 2023 extract | Chronological holdout, rolling folds, event metrics, uncertainty analysis |
+| Robust MAD is more temporally stable than the other tested methods | Supported descriptively on this dataset | Four rolling folds, worst-fold and threshold-stability analysis |
+| The detector recognizes independently governed grid incidents | **Not established** | No authorized independent outcome dataset is currently active |
+| Results generalize across years, zones, or market regimes | **Not established** | The catalog currently contains one active zone-year |
+| Acting on an alert improves cost or reliability | **Not established** | Utility coefficients are scenarios, not observed intervention outcomes |
+
+The negative controls reject accidental timestamp alignment, but they do not
+remove construct coupling between the proxy label and forecast-error features.
+Similarly, high ROC-AUC or PR-AUC is ranking evidence, not proof that a chosen
+threshold transfers across seasons.
 
 ## Research questions and contributions
 
-The implementation addresses four questions:
+The implementation addresses seven questions:
 
 1. **Baseline strength:** how far can causal rolling statistics go before a
    multivariate or sequential model is justified?
@@ -56,6 +99,12 @@ The implementation addresses four questions:
    and testing are separated chronologically rather than evaluated in-sample?
 4. **Operational reproducibility:** can the trained system be versioned, scored
    incrementally, monitored, and reviewed without changing research semantics?
+5. **Uncertainty:** do paired serial-dependence-aware intervals support apparent
+   differences between detectors?
+6. **Robustness:** how sensitive are conclusions to threshold policy, assumed
+   costs, input corruption, and deliberately broken timestamp alignment?
+7. **External validity:** can the same locked protocol be applied across a
+   catalog of zones, years, and independently governed outcomes?
 
 The main contributions are:
 
@@ -64,9 +113,15 @@ The main contributions are:
 - a documented proxy-label construction and explicit separation between proxy
   agreement and independent outcome validation;
 - a 60/10/30 chronological protocol plus four expanding-window seasonal folds;
-- comparison of rolling z-score, robust MAD, Isolation Forest, and an LSTM
-  autoencoder;
+- comparison of rolling z-score, robust MAD, seasonal quantiles, conformal MAD,
+  Isolation Forest, and an LSTM autoencoder;
 - validation-only alert-threshold calibration;
+- point and event metrics without point adjustment, PR-AUC/MCC, alert burden,
+  moving-block intervals, and paired comparisons;
+- negative controls, threshold/cost sensitivity, feature ablation, and
+  corruption stress tests;
+- a validated dataset/evidence catalog that rejects unsupported provenance
+  claims and can execute every active replication dataset;
 - optional contracts for weather, load, net-import, and independent event data;
 - a dependency-light operational layer with immutable manifests, artifact
   checksums, idempotent upserts, alert episodes, feedback, and monitoring.
@@ -83,11 +138,13 @@ flowchart LR
     D --> E[Fit window: 60%]
     D --> F[Validation window: 10%]
     D --> G[Holdout window: 30%]
-    E --> H[Four detectors]
+    E --> H[Six detector families]
     F --> I[Threshold calibration]
     H --> I
     I --> G
-    G --> J[Metrics and diagnostic plots]
+    G --> J[Point and event metrics]
+    J --> V[Block uncertainty and paired comparisons]
+    J --> W[Negative controls and stress tests]
     I --> R[Versioned model registry]
     R --> S[Incremental batch scoring]
     S --> T[Deduplicated alert episodes]
@@ -240,14 +297,38 @@ $$
 where \(H_t\) is the trailing 720-hour history. The median and MAD reduce the
 influence of extreme observations relative to mean and standard deviation.
 
-### 3. Isolation Forest
+### 3. Seasonal conditional quantile
+
+The interpretable seasonal baseline estimates the 99th percentile of absolute
+forecast error separately for each month-hour group in the fit period. A global
+fit-period quantile is used only when a group has fewer than 12 observations.
+The score is current absolute error divided by its historical seasonal
+threshold. This makes an error exceptional relative to comparable hours rather
+than to an unconditional annual distribution.
+
+### 4. Split-conformal MAD
+
+Validation MAD scores are converted to upper-tail finite-sample conformal
+p-values:
+
+$$
+p(s) = \frac{1 + \sum_{i=1}^{n}\mathbb{1}[s_i^{cal} \ge s]}{n+1}.
+$$
+
+The fixed operating rule flags `p <= 0.05` without using validation labels.
+Because seasonal time-series observations are not exchangeable, the conformal
+interpretation is approximate and is evaluated empirically rather than assumed.
+The construction is motivated by conformalized unsupervised time-series anomaly
+detection [4].
+
+### 5. Isolation Forest
 
 The multivariate detector uses 200 isolation trees, contamination 0.05, and
 random seed 42. The model is fitted only on the fit window. Higher anomaly
 scores correspond to easier isolation in feature space. The method follows the
 isolation principle introduced by Liu, Ting, and Zhou [1].
 
-### 4. LSTM autoencoder
+### 6. LSTM autoencoder
 
 The sequence model consumes 24-hour windows of all registered features:
 
@@ -290,15 +371,19 @@ The holdout is not used to fit model parameters or thresholds.
 ### Rolling-origin evaluation
 
 `run_backtest.py` creates four expanding fit windows. Every fold has a later
-validation interval and a non-overlapping test interval. Z-score, MAD, and
-Isolation Forest are evaluated by default; LSTM can be included with
+validation interval and a non-overlapping test interval. Z-score, MAD, seasonal
+quantile, and Isolation Forest are evaluated by default; LSTM can be included with
 `--include-lstm` because repeated sequence training is substantially slower.
 
 ### Metrics
 
-Reported metrics are precision, recall, F1, ROC-AUC, and number of flagged
-hours. ROC-AUC is computed only when finite scores and both target classes are
-present. For a positive class of proxy anomalies:
+Reported point metrics are precision, recall, F1, PR-AUC, ROC-AUC, Matthews
+correlation coefficient, flagged hours, and false alerts per 30 days. The
+scientific study additionally reports one-to-one event precision/recall/F1,
+detection delay, false events per 30 days, seasonal strata, and 95% moving-block
+bootstrap intervals. No point adjustment is used. ROC-AUC and PR-AUC are
+computed only when finite scores and both target classes are present. For a
+positive class of proxy anomalies:
 
 $$
 \operatorname{precision}=\frac{TP}{TP+FP},\qquad
@@ -310,9 +395,25 @@ F_1 = 2\frac{\operatorname{precision}\cdot\operatorname{recall}}
 {\operatorname{precision}+\operatorname{recall}}.
 $$
 
+### Scientific study layers
+
+The repository separates the original benchmark from two locked scientific
+study layers:
+
+1. **Phase 1 — measurement and uncertainty:** seasonal and conformal baselines,
+   one-to-one event matching, PR-AUC/MCC and alert burden, 168-hour moving-block
+   intervals, seasonal strata, and cumulative feature ablation.
+2. **Phase 2 — robustness and replication readiness:** paired block-bootstrap
+   differences, validation-quantile threshold sweeps, circular-shift negative
+   controls with Holm correction, decision scenarios, seeded corruption tests,
+   temporal threshold transfer, and catalog-driven multi-dataset execution.
+
+Phase 2 does not use its results to revise the locked Phase 1 holdout model or
+threshold. Detailed protocols and reports are versioned in `docs/`.
+
 ## Results
 
-### Final chronological holdout
+### Initial four-model chronological holdout
 
 | Model | Precision | Recall | F1 | ROC-AUC | Flagged hours | Calibrated threshold |
 |---|---:|---:|---:|---:|---:|---:|
@@ -321,7 +422,9 @@ $$
 | Rolling z-score | 0.879 | 0.176 | 0.293 | 0.974 | 33 | 3.2933 |
 | LSTM autoencoder | 0.119 | 0.655 | 0.201 | 0.685 | 911 | 1.0123 |
 
-The holdout contains 165 proxy-positive hours. Full-precision values and split
+This table preserves the original four-model experiment. The later scientific
+study below adds seasonal and conformal comparators and reports the more
+complete metric set. The holdout contains 165 proxy-positive hours. Full-precision values and split
 metadata are stored in
 [`results/metrics/anomaly_results.csv`](results/metrics/anomaly_results.csv).
 
@@ -330,6 +433,7 @@ metadata are stored in
 | Model | Precision, mean ± SD | Recall, mean ± SD | F1, mean ± SD | ROC-AUC, mean ± SD |
 |---|---:|---:|---:|---:|
 | **Robust MAD** | **0.941 ± 0.056** | **0.856 ± 0.226** | **0.879 ± 0.134** | **0.999 ± 0.001** |
+| Seasonal quantile | 0.661 ± 0.467 | 0.628 ± 0.449 | 0.625 ± 0.424 | 0.998 ± 0.001 |
 | Rolling z-score | 0.649 ± 0.214 | 0.672 ± 0.109 | 0.632 ± 0.044 | 0.978 ± 0.008 |
 | Isolation Forest | 0.502 ± 0.150 | 0.730 ± 0.245 | 0.552 ± 0.092 | 0.964 ± 0.013 |
 
@@ -337,22 +441,83 @@ Fold-level dates, thresholds, and metrics are available in
 [`backtest_folds.csv`](results/metrics/backtest_folds.csv); aggregate values are
 in [`backtest_summary.csv`](results/metrics/backtest_summary.csv).
 
+### Scientific validation study
+
+The pre-specified Phase 1 study adds a seasonal quantile baseline, a label-free
+split-conformal MAD operating point, event metrics, 168-hour moving-block
+bootstrap intervals, seasonal strata, and cumulative Isolation Forest feature
+ablations. The protocol was fixed before these artifacts were inspected; see
+[`SCIENTIFIC_PROTOCOL.md`](docs/SCIENTIFIC_PROTOCOL.md).
+
+| Model | Precision | Recall | F1 (95% block CI) | PR-AUC | Event F1 | False alerts / 30 d |
+|---|---:|---:|---:|---:|---:|---:|
+| **Seasonal quantile** | **0.890** | 0.788 | **0.836 (0.757–0.901)** | 0.956 | **0.833** | 4.48 |
+| Robust MAD | 0.965 | 0.661 | 0.784 (0.643–0.861) | **0.956** | 0.776 | **1.12** |
+| Conformal MAD, α = 0.05 | 0.600 | **1.000** | 0.750 (0.668–0.807) | 0.947 | 0.712 | 30.81 |
+| Isolation Forest | 0.538 | 0.636 | 0.583 (0.482–0.627) | 0.638 | 0.654 | 25.20 |
+| Rolling z-score | 0.879 | 0.176 | 0.293 (0.120–0.424) | 0.742 | 0.361 | 1.12 |
+
+These remain **proxy-label results**. The attempted ENTSO-E imbalance outcome
+query returned HTTP 401, so no external-validity claim is made. The importer
+records outcome coverage and preserves missing hours as unknown; it does not
+manufacture negative labels.
+
+The ablation is also cautionary: Isolation Forest F1 peaks at 0.630 after
+adding calendar features, then falls to 0.583 with all cyclic encodings. More
+features did not monotonically improve generalization. Full tables, the study
+manifest, and figures are in [`results/scientific/`](results/scientific/).
+
+### Phase 2 robustness studies
+
+Phase 2 was locked in [`PHASE2_PROTOCOL.md`](docs/PHASE2_PROTOCOL.md) before its
+new artifacts were inspected. It adds paired model-comparison uncertainty,
+validation-quantile threshold policies, scenario utility, circular-shift
+negative controls with Holm correction, holdout-only feature corruption, and
+catalog-driven multi-dataset execution.
+
+| Phase 2 finding | Result |
+|---|---|
+| Robust MAD vs seasonal quantile F1 | -0.052; 95% paired block CI -0.189 to 0.071 |
+| Isolation Forest vs seasonal quantile F1 | -0.253; 95% CI -0.345 to -0.178 |
+| Rolling z-score vs seasonal quantile F1 | -0.543; 95% CI -0.727 to -0.404 |
+| Negative controls | All 10 Holm-adjusted p-values = 0.01996 |
+| Isolation Forest at 20% missingness | Mean F1 falls from 0.583 to 0.343 |
+| Most stable rolling model | Robust MAD: mean F1 0.879, worst fold 0.683 |
+| Seasonal threshold transfer | Mean F1 0.625, worst fold 0.000 |
+
+Robust MAD and seasonal quantile are not resolved by the paired comparison.
+Robust MAD is substantially more stable across folds, while seasonal quantile
+has the higher fixed-holdout F1. Scenario utility selects conformal MAD in 11
+of 12 assumed cost settings, but those coefficients are sensitivity parameters,
+not measured economic costs.
+
+The full interpretation is in
+[`PHASE2_REPORT.md`](docs/PHASE2_REPORT.md). Only one catalog dataset is active,
+and it uses an internal proxy label, so Phase 2 still does not establish
+cross-zone, cross-year, or independent-outcome validity.
+
 ### Interpretation
 
-- **Robust MAD closely reproduces the proxy construct.** Its strong metrics are
-  useful evidence that robust local scale is stable, but they are not evidence
-  of independent incident detection.
-- **Isolation Forest is the strongest multivariate model on holdout F1.** Its
-  ranking remains strong across folds, although threshold transfer changes the
-  precision/recall balance.
-- **The calibrated z-score becomes conservative in the final seasonal regime.**
-  Its high ROC-AUC and low recall show that ranking quality and binary operating
-  point quality are distinct questions.
-- **The LSTM is poorly calibrated across seasons.** It flags 35.4% of holdout
-  hours. Complexity does not compensate for distribution shift, limited data,
-  or a proxy target dominated by instantaneous error magnitude.
-- **Simple baselines are essential.** On this dataset, the statistical and
-  robust methods are more competitive than the neural model.
+- **Seasonal quantile wins the fixed holdout but not the stability study.** Its
+  F1 is 0.836, yet one rolling fold produces zero alerts and F1 = 0. This is
+  evidence of threshold-transfer risk, not a contradiction to hide.
+- **Robust MAD is the strongest practical benchmark.** Its fixed-holdout F1 is
+  0.784, its mean rolling F1 is 0.879, its worst fold is 0.683, and it averages
+  only 2.66 false alerts per 30 days across folds. Its paired difference from
+  seasonal quantile remains unresolved.
+- **Isolation Forest does not justify its additional complexity here.** It is
+  significantly worse than seasonal quantile in paired F1 and PR-AUC, its full
+  feature set underperforms a smaller calendar-inclusive set, and missing input
+  cells materially degrade performance.
+- **The LSTM is poorly calibrated across seasons.** It flags 35.4% of the
+  original holdout hours. Complexity does not compensate for distribution
+  shift, limited data, or a proxy target dominated by instantaneous error.
+- **Ranking and operating points are separate questions.** Seasonal quantile
+  retains mean rolling PR-AUC 0.965 while its transferred binary threshold
+  fails in one fold. Every model changes materially across threshold policies.
+- **Negative controls are necessary but insufficient.** Circular shifts show
+  timestamp-specific association after Holm correction, while proxy-target
+  circularity and single-zone evidence still prevent an external-validity claim.
 
 ## Diagnostic figures
 
@@ -390,6 +555,28 @@ visible.
 
 Blank months lie outside the final holdout. Color intensity is the fraction of
 hours flagged within each observed month/hour cell.
+
+### Scientific precision-recall comparison
+
+![Scientific precision-recall curves](results/scientific/precision_recall.png)
+
+The simple robust and seasonal scores dominate the multivariate Isolation
+Forest over most of the recall range on the proxy holdout.
+
+### Paired F1 differences
+
+![Paired F1 differences versus seasonal quantile](results/phase2/de_lu_2023/paired_f1_differences.png)
+
+Intervals crossing zero do not resolve a difference from seasonal quantile.
+Robust MAD and conformal MAD cross zero; rolling z-score and Isolation Forest
+are consistently below zero.
+
+### Feature-corruption robustness
+
+![Isolation Forest feature-corruption stress test](results/phase2/de_lu_2023/stress_robustness.png)
+
+Gaussian perturbation has limited effect over the tested range, whereas random
+cell missingness with fit-median imputation causes substantial degradation.
 
 ## Operational architecture
 
@@ -461,7 +648,13 @@ python run_detector.py --run-id germany-2023-v1
 # 4. Run four expanding-window folds
 python run_backtest.py
 
-# Optional: include repeated LSTM training in the backtest
+# 5. Run the pre-specified scientific study and uncertainty analysis
+python run_scientific_study.py
+
+# 6. Run Phase 2 robustness and external-validity-readiness studies
+python run_phase2_studies.py
+
+# Optional: include repeated LSTM training in the rolling backtest
 python run_backtest.py --include-lstm --epochs 10
 ```
 
@@ -494,79 +687,115 @@ python -m unittest discover -s tests -v
 python check_status.py
 ```
 
-The current suite contains 15 tests covering causal label construction, ramp
+The current suite contains 32 tests covering causal label construction, ramp
 alignment, sequence alignment, threshold calibration, date-effective capacity,
 retry behavior, rolling folds, independent-label contracts, atomic idempotent
-storage, cross-batch alert deduplication, feedback, and state persistence.
+storage, cross-batch alert deduplication, feedback, state persistence, event
+matching, serial bootstrap reproducibility, conformal calibration, seasonal
+fallback, outcome missingness, API-token redaction, paired inference, negative
+controls, Holm adjustment, scenario utility, controlled corruption, and dataset
+catalog contracts.
 
 ## Repository structure
 
 ```text
 entso-renewable-anomaly-detector/
 ├── config/
-│   └── capacity_history.csv
+│   ├── capacity_history.csv         # date-effective capacity assumptions
+│   └── study_datasets.csv           # dataset, outcome and evidence registry
 ├── data/
-│   ├── external/                  # contracts/examples; no fabricated sources
-│   ├── raw/                       # ignored reproducible API extract
-│   └── processed/                 # ignored engineered parquet
+│   ├── external/                    # external covariate/outcome contracts
+│   ├── raw/                         # ignored reproducible API extract
+│   └── processed/                   # ignored engineered parquet
 ├── docs/
 │   ├── IMPROVEMENT_PLAN.md
-│   └── OPERATIONS.md
+│   ├── OPERATIONS.md
+│   ├── SCIENTIFIC_PROTOCOL.md       # locked Phase 1 protocol
+│   ├── PHASE2_PROTOCOL.md           # locked robustness protocol
+│   └── PHASE2_REPORT.md             # interpreted Phase 2 results
 ├── models/
-│   └── registry/                  # ignored immutable local model versions
+│   └── registry/                    # ignored immutable local model versions
 ├── results/
-│   ├── metrics/
-│   └── plots/
+│   ├── metrics/                     # original and rolling benchmarks
+│   ├── plots/                       # original diagnostics
+│   ├── scientific/                  # Phase 1 tables, figures and manifest
+│   └── phase2/                      # robustness, null and transfer studies
 ├── src/
 │   ├── models/
 │   │   ├── iforest_model.py
 │   │   ├── lstm_autoencoder.py
 │   │   ├── robust_model.py
+│   │   ├── seasonal_quantile_model.py
 │   │   └── zscore_model.py
 │   ├── alerts.py
 │   ├── backtest.py
 │   ├── capacity.py
+│   ├── conformal.py
 │   ├── context.py
 │   ├── evaluate.py
+│   ├── event_evaluate.py
 │   ├── features.py
 │   ├── fetch.py
 │   ├── labels.py
 │   ├── monitoring.py
+│   ├── outcomes.py
 │   ├── registry.py
+│   ├── robustness.py
 │   ├── scoring.py
+│   ├── study_data.py
 │   ├── storage.py
 │   └── visualize.py
 ├── tests/
+├── fetch_operational_outcomes.py
 ├── check_status.py
 ├── record_feedback.py
 ├── register_current.py
 ├── run_backtest.py
 ├── run_detector.py
-└── run_operational.py
+├── run_operational.py
+├── run_scientific_study.py
+└── run_phase2_studies.py
 ```
 
 ## Independent outcome labels
 
-The preferred next validation step is to attach a timestamped outcome series
-from an independently governed source—for example, reviewed reserve-activation
-events, imbalance-price excursions with a pre-registered definition, or expert
-incident annotations. The required CSV schema is `timestamp,is_event`.
+The next evidential step is a timestamped outcome governed independently of the
+forecast-error features—for example, reviewed reserve activations, a
+pre-registered imbalance-price/volume stress rule, or expert-adjudicated grid
+events. Phase 2 registers these sources in
+[`config/study_datasets.csv`](config/study_datasets.csv) instead of accepting an
+untracked label-column switch.
 
-```python
-from src.labels import attach_event_labels
+The catalog enforces three evidence levels and compatible label types:
 
-features = attach_event_labels(features, "data/external/event_labels.csv")
-```
+| Evidence level | Label type | Outcome contract |
+|---|---|---|
+| `internal_proxy` | `rolling_forecast_error_proxy` | Feature parquet containing `is_anomaly` |
+| `external_proxy` | `operational_stress_proxy` | Imbalance price/volume parquet |
+| `adjudicated_outcome` | `adjudicated_event` | CSV with `timestamp,is_event` |
 
-Then evaluate without changing the detector implementation:
+External evidence levels are rejected when `outcome_path` is absent.
+Adjudicated timestamps not present in the outcome file remain unknown during
+scientific evaluation; they are not silently converted to normal events.
+
+With an authorized ENTSO-E credential, operational outcomes can be prepared as:
 
 ```powershell
-python run_detector.py --label-column event_label --run-id external-label-v1
-python run_backtest.py --label-column event_label
+python fetch_operational_outcomes.py `
+  --start 20230101 --end 20240101 --zone DE_LU `
+  --output data/external/operational_outcomes_2023.parquet
 ```
 
-Label provenance, inclusion rules, timestamp semantics, and adjudication policy
-should be versioned beside the file.
+After adding a catalog row, the locked Phase 2 analyses run with:
+
+```powershell
+python run_phase2_studies.py --dataset-id YOUR_DATASET_ID
+```
+
+Every independent dataset should version its provenance, extraction query,
+coverage, timezone semantics, event definition, reviewer/adjudication policy,
+and permissible exclusions. Cross-dataset claims require reporting every active
+catalog entry, not selecting only favorable replications.
 
 ## Threats to validity and limitations
 
@@ -582,8 +811,9 @@ should be versioned beside the file.
    alert reduces balancing cost, reserve activation, or reliability risk.
 5. **Detection, not forecasting.** Actual generation is required to construct
    the core error features. Alerts are contemporaneous diagnostics.
-6. **Threshold instability.** Validation-optimal F1 thresholds depend on class
-   prevalence and season. The LSTM result demonstrates this sensitivity.
+6. **Threshold instability.** Validation-optimal and validation-quantile
+   thresholds depend on prevalence and season. The LSTM and the zero-alert
+   seasonal-quantile fold demonstrate this sensitivity.
 7. **Limited hyperparameter search.** Model configurations are controlled
    comparisons, not exhaustive optimizations. Searching on the final holdout
    would invalidate the protocol.
@@ -594,6 +824,14 @@ should be versioned beside the file.
    supported but not present in the bundled benchmark.
 10. **Operational prototype scope.** Local parquet and CSV state are suitable
     for a transparent scheduled prototype, not concurrent distributed writers.
+11. **Input missingness.** Median imputation is not a substitute for available
+    source data. Isolation Forest loses approximately 41% relative F1 at 20%
+    random cell missingness in the controlled stress study.
+12. **Negative-control scope.** Circular label shifts test timestamp alignment,
+    not independence between forecast-error-derived predictors and labels.
+13. **Scenario—not economic—utility.** Phase 2 cost coefficients are declared
+    sensitivity assumptions. They are not balancing-market prices, reliability
+    costs, or measured benefits of operator intervention.
 
 ## Future research
 
@@ -601,14 +839,10 @@ should be versioned beside the file.
 - expand to multiple bidding zones and multiple years;
 - replace project capacity assumptions with authoritative dated series;
 - add numerical weather prediction, load, interconnector, and curtailment data;
-- quantify calibration with precision-recall curves, expected alert burden, and
-  cost-sensitive utility rather than F1 alone;
-- evaluate conformal, extreme-value, change-point, and probabilistic residual
-  methods;
+- add cost-sensitive utility based on real balancing and operator-review costs;
+- evaluate extreme-value, change-point, and probabilistic residual methods;
 - use nested rolling-origin model selection to avoid optimistic tuning;
-- evaluate event-level detection delay and episode precision in addition to
-  hour-level metrics;
-- compare static, seasonal, and adaptive thresholds under concept drift; and
+- compare seasonal and adaptive thresholds under monitored concept drift; and
 - study whether a predictive model can provide useful lead time before actual
   generation becomes available.
 
@@ -619,6 +853,19 @@ should be versioned beside the file.
 | [`anomaly_results.csv`](results/metrics/anomaly_results.csv) | Full holdout metrics and thresholds |
 | [`backtest_folds.csv`](results/metrics/backtest_folds.csv) | Per-fold dates, thresholds, and metrics |
 | [`backtest_summary.csv`](results/metrics/backtest_summary.csv) | Across-fold mean and standard deviation |
+| [`SCIENTIFIC_PROTOCOL.md`](docs/SCIENTIFIC_PROTOCOL.md) | Pre-specified questions, split, metrics, and interpretation rules |
+| [`benchmark.csv`](results/scientific/benchmark.csv) | Scientific holdout point metrics and operating burden |
+| [`event_metrics.csv`](results/scientific/event_metrics.csv) | One-to-one event metrics without point adjustment |
+| [`confidence_intervals.csv`](results/scientific/confidence_intervals.csv) | Moving-block bootstrap intervals |
+| [`ablation.csv`](results/scientific/ablation.csv) | Cumulative Isolation Forest feature ablation |
+| [`study_manifest.json`](results/scientific/study_manifest.json) | Data hash, Git revision, split, labels, seed, and package versions |
+| [`PHASE2_PROTOCOL.md`](docs/PHASE2_PROTOCOL.md) | Locked Phase 2 analyses and claim boundaries |
+| [`PHASE2_REPORT.md`](docs/PHASE2_REPORT.md) | Phase 2 results and scientific interpretation |
+| [`paired_comparisons.csv`](results/phase2/de_lu_2023/paired_comparisons.csv) | Paired 168-hour block-bootstrap model differences |
+| [`negative_controls.csv`](results/phase2/de_lu_2023/negative_controls.csv) | Circular-shift null tests with Holm correction |
+| [`stress_summary.csv`](results/phase2/de_lu_2023/stress_summary.csv) | Missingness and measurement-noise robustness |
+| [`threshold_stability.csv`](results/phase2/de_lu_2023/threshold_stability.csv) | Rolling threshold and worst-fold transfer evidence |
+| [`phase2_manifest.json`](results/phase2/phase2_manifest.json) | Dataset hashes, evidence levels, settings, and claim boundary |
 | [`IMPROVEMENT_PLAN.md`](docs/IMPROVEMENT_PLAN.md) | Three-phase technical evolution |
 | [`OPERATIONS.md`](docs/OPERATIONS.md) | Scheduling, state, feedback, and rollback |
 | [`tests/`](tests/) | Regression tests for research and operational invariants |
@@ -636,6 +883,23 @@ and mutable runtime state are intentionally excluded from Git.
    [doi:10.1162/neco.1997.9.8.1735](https://doi.org/10.1162/neco.1997.9.8.1735)
 3. ENTSO-E, “Transparency Platform.”
    [https://transparency.entsoe.eu/](https://transparency.entsoe.eu/)
+
+4. N. Xu and H. Boström, “Conformalized Time Series Anomaly Thresholding with
+   Latent Space Features,” *Proceedings of Machine Learning Research*, vol. 329,
+   pp. 676–688, 2026.
+   [PMLR paper](https://proceedings.mlr.press/v329/xu26a.html)
+5. R. Wu and E. Keogh, “Current Time Series Anomaly Detection Benchmarks are
+   Flawed and are Creating the Illusion of Progress,” *IEEE Transactions on
+   Knowledge and Data Engineering*, 2021.
+   [doi:10.1109/TKDE.2021.3112126](https://doi.org/10.1109/TKDE.2021.3112126)
+6. S. Sørbø and M. Ruocco, “Navigating the Metric Maze: A Taxonomy of
+   Evaluation Metrics for Anomaly Detection in Time Series,” *Data Mining and
+   Knowledge Discovery*, 2024.
+   [doi:10.1007/s10618-023-00988-8](https://doi.org/10.1007/s10618-023-00988-8)
+7. Q. Liu and J. Paparrizos, “The Elephant in the Room: Towards A Reliable
+   Time-Series Anomaly Detection Benchmark,” *NeurIPS Datasets and Benchmarks
+   Track*, 2024.
+   [NeurIPS paper](https://papers.nips.cc/paper_files/paper/2024/hash/c3f3c690b7a99fba16d0efd35cb83b2c-Abstract-Datasets_and_Benchmarks_Track.html)
 
 ## Citation
 

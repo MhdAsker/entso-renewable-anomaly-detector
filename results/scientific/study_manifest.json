@@ -1,0 +1,73 @@
+{
+  "protocol": "docs/SCIENTIFIC_PROTOCOL.md",
+  "feature_path": "C:\\Users\\asker\\Documents\\GenAIProjects\\entso-renewable-anomaly-detector\\data\\processed\\features.parquet",
+  "feature_sha256": "0fb3e8ab8499acf35683db3bbb56f0224210c4095d562d05058f7eaf2b5ac08e",
+  "git_revision": "ac1a29e596f32e93440ac644dd656c741df04764",
+  "git_dirty": true,
+  "random_seed": 42,
+  "split": {
+    "fit": [
+      "2023-01-07 23:00:00",
+      "2023-08-10 03:00:00"
+    ],
+    "validation": [
+      "2023-08-10 04:00:00",
+      "2023-09-14 19:00:00"
+    ],
+    "holdout": [
+      "2023-09-14 20:00:00",
+      "2023-12-30 22:00:00"
+    ],
+    "rows": {
+      "fit": 5141,
+      "validation": 856,
+      "holdout": 2571
+    }
+  },
+  "label": {
+    "source": "rolling_forecast_error_proxy",
+    "independent_outcome": false,
+    "warning": "Construct-coupled proxy; not external ground truth."
+  },
+  "threshold_policy": "F1-optimal on validation labels; conformal MAD is label-free",
+  "bootstrap": {
+    "method": "moving block",
+    "block_hours": 168,
+    "resamples": 500,
+    "confidence": 0.95
+  },
+  "feature_columns": [
+    "wind_error_mw",
+    "solar_error_mw",
+    "total_error_mw",
+    "wind_error_norm",
+    "solar_error_norm",
+    "total_error_norm",
+    "wind_ramp_mw",
+    "solar_ramp_mw",
+    "ramp_error_mw",
+    "error_roll_mean_24h",
+    "error_roll_std_24h",
+    "error_roll_mean_168h",
+    "abs_error_roll_max_24h",
+    "hour",
+    "month",
+    "season",
+    "is_night",
+    "is_weekend",
+    "hour_sin",
+    "hour_cos",
+    "week_sin",
+    "week_cos",
+    "year_sin",
+    "year_cos"
+  ],
+  "python": "3.12.7",
+  "packages": {
+    "numpy": "1.26.4",
+    "pandas": "2.2.3",
+    "scikit-learn": "1.5.1",
+    "matplotlib": "3.9.2",
+    "pyarrow": "23.0.1"
+  }
+}

@@ -18,6 +18,7 @@ from features import feature_columns_for
 from models.iforest_model import IsolationForestDetector
 from models.lstm_autoencoder import LSTMAnomalyDetector
 from models.robust_model import RobustMADDetector
+from models.seasonal_quantile_model import SeasonalQuantileDetector
 from models.zscore_model import ZScoreDetector
 
 
@@ -47,6 +48,8 @@ def run(args: argparse.Namespace) -> tuple[pd.DataFrame, pd.DataFrame]:
             "Z-Score": ZScoreDetector().get_scores(df),
             "Robust MAD": RobustMADDetector().get_scores(df),
         }
+        seasonal = SeasonalQuantileDetector().fit(df.iloc[fold.fit])
+        scores["Seasonal Quantile"] = seasonal.get_scores(df)
         iforest = IsolationForestDetector(random_state=args.seed)
         iforest.fit(X[fold.fit], save_artifact=False)
         scores["Isolation Forest"] = iforest.get_scores(X)
@@ -83,6 +86,10 @@ def run(args: argparse.Namespace) -> tuple[pd.DataFrame, pd.DataFrame]:
         f1_std=("f1", "std"),
         roc_auc_mean=("roc_auc", "mean"),
         roc_auc_std=("roc_auc", "std"),
+        pr_auc_mean=("pr_auc", "mean"),
+        pr_auc_std=("pr_auc", "std"),
+        mcc_mean=("mcc", "mean"),
+        false_alerts_per_30d_mean=("false_alerts_per_30d", "mean"),
     )
     output_dir = ROOT / "results" / "metrics"
     output_dir.mkdir(parents=True, exist_ok=True)

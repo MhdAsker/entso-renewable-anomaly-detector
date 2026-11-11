@@ -1,0 +1,54 @@
+{
+  "protocol": "docs/PHASE2_PROTOCOL.md",
+  "git": {
+    "revision": "ac1a29e596f32e93440ac644dd656c741df04764",
+    "dirty": true
+  },
+  "random_seed": 42,
+  "paired_bootstrap": {
+    "resamples": 500,
+    "block_hours": 168
+  },
+  "negative_control_shifts": 500,
+  "stress_repeats": 20,
+  "datasets": [
+    {
+      "dataset_id": "de_lu_2023",
+      "feature_path": "C:\\Users\\asker\\Documents\\GenAIProjects\\entso-renewable-anomaly-detector\\data\\processed\\features.parquet",
+      "feature_sha256": "0fb3e8ab8499acf35683db3bbb56f0224210c4095d562d05058f7eaf2b5ac08e",
+      "zone": "DE_LU",
+      "declared_period": [
+        "2023-01-01",
+        "2023-12-31"
+      ],
+      "observed_period": [
+        "2023-01-07 23:00:00",
+        "2023-12-30 22:00:00"
+      ],
+      "rows": 8568,
+      "label": {
+        "label_type": "rolling_forecast_error_proxy",
+        "evidence_level": "internal_proxy",
+        "independent_outcome": false
+      },
+      "split_rows": {
+        "fit": 5141,
+        "validation": 856,
+        "holdout": 2571
+      },
+      "thresholds": {
+        "Rolling z-score": 3.2932926668113067,
+        "Robust MAD": 3.7028015802026126,
+        "Seasonal quantile": 0.5559010293450577,
+        "Isolation Forest": 0.01078661599981634,
+        "Conformal MAD (alpha=0.05)": 0.95
+      }
+    }
+  ],
+  "external_validity_status": {
+    "active_dataset_count": 1,
+    "has_independent_outcome": false,
+    "criterion_met": false
+  },
+  "claim_boundary": "Cross-dataset external validity requires at least two independently sourced active datasets; current results remain internal when the catalog has one."
+}

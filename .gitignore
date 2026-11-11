@@ -4,6 +4,8 @@
 # Data files (large, reproducible via fetch.py)
 data/raw/
 data/processed/
+data/external/operational_outcomes*.parquet
+data/external/operational_outcomes*.json
 
 # Trained model artefacts
 models/iforest.pkl
