@@ -2,8 +2,8 @@
   "protocol": "docs/SCIENTIFIC_PROTOCOL.md",
   "feature_path": "C:\\Users\\asker\\Documents\\GenAIProjects\\entso-renewable-anomaly-detector\\data\\processed\\features.parquet",
   "feature_sha256": "0fb3e8ab8499acf35683db3bbb56f0224210c4095d562d05058f7eaf2b5ac08e",
-  "git_revision": "ac1a29e596f32e93440ac644dd656c741df04764",
-  "git_dirty": true,
+  "git_revision": "6b415e2425b72643dc266e85a7579c438f48e540",
+  "git_dirty": false,
   "random_seed": 42,
   "split": {
     "fit": [
