@@ -1,8 +1,8 @@
 {
   "protocol": "docs/PHASE2_PROTOCOL.md",
   "git": {
-    "revision": "ac1a29e596f32e93440ac644dd656c741df04764",
-    "dirty": true
+    "revision": "345d9a1b3c78e0a16d749e898a6f5c3556f1b180",
+    "dirty": false
   },
   "random_seed": 42,
   "paired_bootstrap": {
